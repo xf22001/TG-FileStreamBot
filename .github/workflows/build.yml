@@ -3,19 +3,17 @@ name: Manual Build
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Tag to use for the build (e.g., v1.0.0)'
-        required: true
-        default: 'manual'
+      build_name:
+        description: 'Optional build identifier'
+        required: false
+        default: 'dev'
   push:
     branches:
       - '*'
-    tags-ignore:
-      - 'v*'
 
 jobs:
   build:
-    name: Build for ${{ matrix.goos }}/${{ matrix.goarch }}
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -37,8 +35,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -51,7 +47,7 @@ jobs:
           go mod tidy
           go generate ./...
 
-      - name: Build
+      - name: Build Binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -61,30 +57,32 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=fsb.exe
           fi
-          # 参数对齐 Goreleaser: -tags=musl, -extldflags -static, -s -w
+          # 完全一致的 release 编译参数
           go build -o "$BINARY_NAME" -tags=musl -ldflags="-extldflags -static -s -w" ./cmd/fsb
 
-      - name: Package
+      - name: Prepare Package
         run: |
-          # 自动获取标识符: 优先使用输入 Tag，push 触发则使用短哈希
-          VERSION="${{ github.event.inputs.tag }}"
-          if [ -z "$VERSION" ]; then
-            VERSION=$(git rev-parse --short HEAD)
+          # 仅使用标识符区分，不打 tag
+          ID="${{ github.event.inputs.build_name }}"
+          if [ -z "$ID" ]; then
+            ID=$(git rev-parse --short HEAD)
           fi
           
-          PACKAGE_NAME=TG-FileStreamBot-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}
-          mkdir -p upload
+          PACKAGE_DIR="upload"
+          mkdir -p "$PACKAGE_DIR"
+          
+          # 压缩包名称
+          FILENAME="fsb-${ID}-${{ matrix.goos }}-${{ matrix.goarch }}"
           
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip -j "upload/${PACKAGE_NAME}.zip" fsb.exe README.md LICENSE
+            zip -j "${PACKAGE_DIR}/${FILENAME}.zip" fsb.exe README.md LICENSE
           else
-            tar -czvf "upload/${PACKAGE_NAME}.tar.gz" fsb README.md LICENSE
+            tar -czvf "${PACKAGE_DIR}/${FILENAME}.tar.gz" fsb README.md LICENSE
           fi
 
-      - name: Upload Artifact
+      - name: Upload to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fsb-${{ matrix.goos }}-${{ matrix.goarch }}
           path: upload/*
-          if-no-files-found: error
           retention-days: 7
