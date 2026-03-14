@@ -7,9 +7,6 @@ on:
         description: 'Optional build identifier'
         required: false
         default: 'dev'
-  push:
-    branches:
-      - '*'
 
 jobs:
   build:
