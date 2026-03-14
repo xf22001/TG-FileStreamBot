@@ -11,6 +11,7 @@ import (
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/glebarez/sqlite"
+	"github.com/gotd/td/telegram/dcs"
 )
 
 var Bot *gotgproto.Client
@@ -31,6 +32,9 @@ func StartClient(log *zap.Logger) (*gotgproto.Client, error) {
 				Session: sessionMaker.SqlSession(
 					sqlite.Open("fsb.session"),
 				),
+				Resolver: dcs.Plain(dcs.PlainOptions{
+					Dial: config.ValueOf.GetDialer(),
+				}),
 				DisableCopyright: true,
 			},
 		)

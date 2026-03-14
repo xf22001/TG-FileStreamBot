@@ -6,6 +6,7 @@ import (
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
+	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
@@ -29,7 +30,10 @@ func StartUserBot(l *zap.Logger) {
 		config.ValueOf.ApiHash,
 		gotgproto.ClientTypePhone(""),
 		&gotgproto.ClientOpts{
-			Session:          sessionMaker.PyrogramSession(config.ValueOf.UserSession),
+			Session: sessionMaker.PyrogramSession(config.ValueOf.UserSession),
+			Resolver: dcs.Plain(dcs.PlainOptions{
+				Dial: config.ValueOf.GetDialer(),
+			}),
 			DisableCopyright: true,
 		},
 	)

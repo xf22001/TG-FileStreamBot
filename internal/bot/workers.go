@@ -13,6 +13,7 @@ import (
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/glebarez/sqlite"
+	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
@@ -159,7 +160,10 @@ func startWorker(l *zap.Logger, botToken string, index int) (*gotgproto.Client, 
 		config.ValueOf.ApiHash,
 		gotgproto.ClientTypeBot(botToken),
 		&gotgproto.ClientOpts{
-			Session:          sessionType,
+			Session: sessionType,
+			Resolver: dcs.Plain(dcs.PlainOptions{
+				Dial: config.ValueOf.GetDialer(),
+			}),
 			DisableCopyright: true,
 			Middlewares:      GetFloodMiddleware(log.Desugar()),
 		},

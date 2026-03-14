@@ -12,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gotd/td/telegram/dcs"
+	"golang.org/x/net/proxy"
+	"net/url"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/spf13/cobra"
@@ -49,6 +52,7 @@ type config struct {
 	UseSessionFile bool         `envconfig:"USE_SESSION_FILE" default:"true"`
 	UserSession    string       `envconfig:"USER_SESSION"`
 	UsePublicIP    bool         `envconfig:"USE_PUBLIC_IP" default:"false"`
+	Proxy          string       `envconfig:"PROXY" default:""`
 	AllowedUsers   allowedUsers `envconfig:"ALLOWED_USERS"`
 	MultiTokens    []string
 
@@ -89,6 +93,7 @@ func SetFlagsFromConfig(cmd *cobra.Command) {
 	cmd.Flags().Bool("use-session-file", ValueOf.UseSessionFile, "Use session files")
 	cmd.Flags().String("user-session", ValueOf.UserSession, "Pyrogram user session")
 	cmd.Flags().Bool("use-public-ip", ValueOf.UsePublicIP, "Use public IP instead of local IP")
+	cmd.Flags().String("proxy", ValueOf.Proxy, "Proxy URL (e.g. socks5://127.0.0.1:1080)")
 	cmd.Flags().String("multi-token-txt-file", "", "Multi token txt file (Not implemented)")
 	cmd.Flags().Int("stream-concurrency", ValueOf.StreamConcurrency, "Number of parallel block fetches")
 	cmd.Flags().Int("stream-buffer-count", ValueOf.StreamBufferCount, "Number of blocks to prefetch")
@@ -161,6 +166,10 @@ func (c *config) loadConfigFromArgs(log *zap.Logger, cmd *cobra.Command) {
 	streamMaxRetries, _ := cmd.Flags().GetInt("stream-max-retries")
 	if streamMaxRetries != 0 {
 		os.Setenv("STREAM_MAX_RETRIES", strconv.Itoa(streamMaxRetries))
+	}
+	proxy, _ := cmd.Flags().GetString("proxy")
+	if proxy != "" {
+		os.Setenv("PROXY", proxy)
 	}
 }
 
@@ -302,4 +311,18 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+func (c *config) GetDialer() dcs.DialFunc {
+	dialer := proxy.Dial
+	if c.Proxy != "" {
+		u, err := url.Parse(c.Proxy)
+		if err == nil {
+			d, err := proxy.FromURL(u, proxy.Direct)
+			if err == nil {
+				dialer = d.(proxy.ContextDialer).DialContext
+			}
+		}
+	}
+	return dialer
 }
