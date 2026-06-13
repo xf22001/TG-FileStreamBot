@@ -13,12 +13,12 @@ import (
 	"strings"
 
 	"github.com/gotd/td/telegram/dcs"
-	"golang.org/x/net/proxy"
-	"net/url"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"golang.org/x/net/proxy"
+	"net/url"
 )
 
 var ValueOf = &config{}

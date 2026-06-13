@@ -18,18 +18,7 @@ import (
 func (m *command) LoadUserStream(dispatcher dispatcher.Dispatcher) {
 	log := m.log.Named("userstream")
 	defer log.Sugar().Info("Loaded")
-	dispatcher.AddHandler(handlers.NewCommand("getinfo", getInfoFromLink))
 	dispatcher.AddHandler(handlers.NewMessage(nil, linkToUserStream))
-}
-
-func getInfoFromLink(ctx *ext.Context, u *ext.Update) error {
-	text := effectiveText(u)
-	parts := strings.Fields(text)
-	if len(parts) != 2 {
-		ctx.Reply(u, ext.ReplyTextString("Usage: /getinfo https://t.me/<chat>/<message_id>"), nil)
-		return dispatcher.EndGroups
-	}
-	return replyUserStreamInfo(ctx, u, parts[1], true)
 }
 
 func linkToUserStream(ctx *ext.Context, u *ext.Update) error {
@@ -40,7 +29,7 @@ func linkToUserStream(ctx *ext.Context, u *ext.Update) error {
 	if strings.Contains(text, " ") {
 		return nil
 	}
-	return replyUserStreamInfo(ctx, u, text, false)
+	return replyUserStreamInfo(ctx, u, text, true)
 }
 
 func effectiveText(u *ext.Update) string {
@@ -65,28 +54,30 @@ func replyUserStreamInfo(ctx *ext.Context, u *ext.Update, rawLink string, verbos
 		return dispatcher.EndGroups
 	}
 
-	info, err := userstream.ResolveInfo(ctx, rawLink, config.ValueOf.Host)
+	infos, err := userstream.ResolveInfos(ctx, rawLink, config.ValueOf.Host)
 	if err != nil {
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
 		return dispatcher.EndGroups
 	}
 
-	message := formatInfoMessage(info, verbose)
-	row := tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
-		&tg.KeyboardButtonURL{Text: "Download", URL: info.DownloadURL},
-	}}
-	if strings.Contains(info.MimeType, "video") || strings.Contains(info.MimeType, "audio") || strings.Contains(info.MimeType, "pdf") || strings.HasPrefix(info.MimeType, "image/") {
-		row.Buttons = append(row.Buttons, &tg.KeyboardButtonURL{Text: "Stream", URL: info.StreamURL})
-	}
-	markup := &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{row}}
+	for _, info := range infos {
+		message := formatInfoMessage(info, verbose)
+		row := tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonURL{Text: "Download", URL: info.DownloadURL},
+		}}
+		if strings.Contains(info.MimeType, "video") || strings.Contains(info.MimeType, "audio") || strings.Contains(info.MimeType, "pdf") || strings.HasPrefix(info.MimeType, "image/") {
+			row.Buttons = append(row.Buttons, &tg.KeyboardButtonURL{Text: "Stream", URL: info.StreamURL})
+		}
+		markup := &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{row}}
 
-	_, err = ctx.Reply(u, ext.ReplyTextStyledText(styling.Code(message)), &ext.ReplyOpts{
-		Markup:           markup,
-		NoWebpage:        false,
-		ReplyToMessageId: u.EffectiveMessage.ID,
-	})
-	if err != nil {
-		utils.Logger.Sugar().Error(err)
+		_, err = ctx.Reply(u, ext.ReplyTextStyledText(styling.Code(message)), &ext.ReplyOpts{
+			Markup:           markup,
+			NoWebpage:        false,
+			ReplyToMessageId: u.EffectiveMessage.ID,
+		})
+		if err != nil {
+			utils.Logger.Sugar().Error(err)
+		}
 	}
 	return dispatcher.EndGroups
 }

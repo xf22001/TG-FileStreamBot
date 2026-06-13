@@ -12,6 +12,7 @@ import (
 	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/glebarez/sqlite"
 	"github.com/gotd/td/telegram/dcs"
+	"github.com/gotd/td/tg"
 )
 
 var Bot *gotgproto.Client
@@ -53,6 +54,24 @@ func StartClient(log *zap.Logger) (*gotgproto.Client, error) {
 		}
 		commands.Load(log, result.client.Dispatcher)
 		log.Info("Client started", zap.String("username", result.client.Self.Username))
+
+		// Clear and register bot commands
+		go func() {
+			time.Sleep(2 * time.Second) // Small delay to ensure everything is settled
+			_, err := result.client.API().BotsSetBotCommands(context.Background(), &tg.BotsSetBotCommandsRequest{
+				Commands: []tg.BotCommand{
+					{Command: "start", Description: "Start the bot and get help"},
+				},
+				Scope:    &tg.BotCommandScopeDefault{},
+				LangCode: "",
+			})
+			if err != nil {
+				log.Error("Failed to register bot commands", zap.Error(err))
+			} else {
+				log.Info("Bot commands (menu) registered successfully")
+			}
+		}()
+
 		Bot = result.client
 		return result.client, nil
 	}

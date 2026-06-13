@@ -154,7 +154,7 @@ func ParseLink(raw string) (Link, error) {
 	return link, nil
 }
 
-func ResolveInfo(ctx context.Context, rawLink, host string) (*Info, error) {
+func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 	c := Client()
 	if c == nil {
 		return nil, errors.New("USER_SESSION is not configured")
@@ -163,47 +163,68 @@ func ResolveInfo(ctx context.Context, rawLink, host string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	msg, chat, err := getMessage(ctx, c, link)
+	msgs, chat, err := getMessages(ctx, c, link)
 	if err != nil {
 		return nil, err
 	}
-	file, err := utils.FileFromMedia(msg.Media)
-	if err != nil {
-		return nil, err
+
+	// Telegram media groups often have the caption only on the first item.
+	// We find the first non-empty caption and apply it to all items in the group.
+	commonCaption := ""
+	for _, m := range msgs {
+		if m.Message != "" {
+			commonCaption = m.Message
+			break
+		}
 	}
-	token, ref, err := Save(link, file)
-	if err != nil {
-		return nil, err
+
+	var infos []*Info
+	for _, msg := range msgs {
+		file, err := utils.FileFromMedia(msg.Media)
+		if err != nil {
+			continue
+		}
+		token, _, err := Save(link, file)
+		if err != nil {
+			continue
+		}
+		streamURL := strings.TrimRight(host, "/") + "/u/stream/" + token
+		caption := msg.Message
+		if caption == "" {
+			caption = commonCaption
+		}
+		info := &Info{
+			Link:        link,
+			ChatID:      chat.GetID(),
+			MessageID:   msg.ID,
+			Caption:     caption,
+			FileName:    file.FileName,
+			FileSize:    file.FileSize,
+			MimeType:    file.MimeType,
+			StreamURL:   streamURL,
+			DownloadURL: streamURL + "?d=true",
+		}
+		if channel, ok := chat.(*tg.Channel); ok {
+			info.ChatTitle = channel.Title
+			info.ChatUser = channel.Username
+		}
+		if file.FileSize == 0 || strings.HasPrefix(file.MimeType, "image/") {
+			info.MediaType = "photo"
+			info.PreviewURL = streamURL
+		} else if strings.HasPrefix(file.MimeType, "video/") {
+			info.MediaType = "video"
+			info.PreviewURL = streamURL
+		} else if strings.HasPrefix(file.MimeType, "audio/") {
+			info.MediaType = "audio"
+		} else {
+			info.MediaType = "document"
+		}
+		infos = append(infos, info)
 	}
-	_ = ref
-	streamURL := strings.TrimRight(host, "/") + "/u/stream/" + token
-	info := &Info{
-		Link:        link,
-		ChatID:      chat.GetID(),
-		MessageID:   msg.ID,
-		Caption:     msg.Message,
-		FileName:    file.FileName,
-		FileSize:    file.FileSize,
-		MimeType:    file.MimeType,
-		StreamURL:   streamURL,
-		DownloadURL: streamURL + "?d=true",
+	if len(infos) == 0 {
+		return nil, errors.New("no media found in the message(s)")
 	}
-	if channel, ok := chat.(*tg.Channel); ok {
-		info.ChatTitle = channel.Title
-		info.ChatUser = channel.Username
-	}
-	if file.FileSize == 0 || strings.HasPrefix(file.MimeType, "image/") {
-		info.MediaType = "photo"
-		info.PreviewURL = streamURL
-	} else if strings.HasPrefix(file.MimeType, "video/") {
-		info.MediaType = "video"
-		info.PreviewURL = streamURL
-	} else if strings.HasPrefix(file.MimeType, "audio/") {
-		info.MediaType = "audio"
-	} else {
-		info.MediaType = "document"
-	}
-	return info, nil
+	return infos, nil
 }
 
 func Get(token string) (*Ref, bool) {
@@ -226,7 +247,7 @@ func Save(link Link, file *types.File) (string, *Ref, error) {
 	return token, ref, nil
 }
 
-func getMessage(ctx context.Context, c *gotgproto.Client, link Link) (*tg.Message, tg.ChatClass, error) {
+func getMessages(ctx context.Context, c *gotgproto.Client, link Link) ([]*tg.Message, tg.ChatClass, error) {
 	channel, chat, err := resolveChannel(ctx, c, link)
 	if err != nil {
 		return nil, nil, err
@@ -242,11 +263,57 @@ func getMessage(ctx context.Context, c *gotgproto.Client, link Link) (*tg.Messag
 	if !ok || len(messages.Messages) == 0 {
 		return nil, nil, errors.New("message not found")
 	}
-	msg, ok := messages.Messages[0].(*tg.Message)
+	baseMsg, ok := messages.Messages[0].(*tg.Message)
 	if !ok {
 		return nil, nil, errors.New("message is empty or inaccessible")
 	}
-	return msg, chat, nil
+
+	if baseMsg.GroupedID == 0 {
+		return []*tg.Message{baseMsg}, chat, nil
+	}
+
+	// If it's a grouped message, fetch surrounding messages to find siblings
+	searchIDs := make([]tg.InputMessageClass, 0)
+	for i := link.MessageID - 10; i <= link.MessageID + 10; i++ {
+		searchIDs = append(searchIDs, &tg.InputMessageID{ID: i})
+	}
+
+	resGroup, err := c.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: channel,
+		ID:      searchIDs,
+	})
+	if err != nil {
+		return []*tg.Message{baseMsg}, chat, nil // Fallback to single message
+	}
+
+	groupMessages, ok := resGroup.(*tg.MessagesChannelMessages)
+	if !ok {
+		return []*tg.Message{baseMsg}, chat, nil
+	}
+
+	var result []*tg.Message
+	for _, m := range groupMessages.Messages {
+		if msg, ok := m.(*tg.Message); ok {
+			if msg.GroupedID == baseMsg.GroupedID {
+				result = append(result, msg)
+			}
+		}
+	}
+
+	// Sort by ID to maintain order
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[i].ID > result[j].ID {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+
+	if len(result) == 0 {
+		return []*tg.Message{baseMsg}, chat, nil
+	}
+
+	return result, chat, nil
 }
 
 func resolveChannel(ctx context.Context, c *gotgproto.Client, link Link) (*tg.InputChannel, tg.ChatClass, error) {
