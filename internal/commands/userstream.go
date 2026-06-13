@@ -99,9 +99,7 @@ func formatInfoMessage(info *userstream.Info, verbose bool) string {
 		return fmt.Sprintf("%s\n%s", info.StreamURL, summaryLine(info))
 	}
 	caption := info.Caption
-	if len(caption) > 300 {
-		caption = caption[:300] + "..."
-	}
+	caption = truncateText(caption, 300)
 	return fmt.Sprintf(
 		"Group/Channel\n├─ id: %d\n├─ name: %s\n└─ username: %s\nMessage\n├─ id: %d\n├─ type: %s\n├─ file_name: %s\n├─ file_size: %s\n├─ mime_type: %s\n└─ caption: %s",
 		info.ChatID,
@@ -114,6 +112,17 @@ func formatInfoMessage(info *userstream.Info, verbose bool) string {
 		info.MimeType,
 		caption,
 	)
+}
+
+func truncateText(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func summaryLine(info *userstream.Info) string {
