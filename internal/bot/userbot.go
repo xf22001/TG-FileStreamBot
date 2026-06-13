@@ -2,6 +2,7 @@ package bot
 
 import (
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/userstream"
 	"errors"
 
 	"github.com/celestix/gotgproto"
@@ -43,6 +44,7 @@ func StartUserBot(l *zap.Logger) {
 	}
 	UserBot.log = log
 	UserBot.client = client
+	userstream.SetClient(client, log)
 	log.Info("Userbot started", zap.String("username", client.Self.Username), zap.String("FirstName", client.Self.FirstName), zap.String("LastName", client.Self.LastName))
 	if err := UserBot.AddBotsAsAdmins(); err != nil {
 		log.Error("Failed to add bots as admins", zap.Error(err))

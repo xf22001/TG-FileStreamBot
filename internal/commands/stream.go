@@ -50,6 +50,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
 		return dispatcher.EndGroups
 	}
+	messageText := ""
+	if u.EffectiveMessage.Message != nil {
+		messageText = strings.TrimSpace(u.EffectiveMessage.Message.Message)
+	}
+	if strings.HasPrefix(messageText, "https://t.me/") || strings.HasPrefix(messageText, "https://telegram.me/") {
+		return nil
+	}
 	supported, err := supportedMediaFilter(u.EffectiveMessage)
 	if err != nil {
 		return err
