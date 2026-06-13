@@ -29,16 +29,19 @@ func (e *allRoutes) LoadHome(r *Route) {
 }
 
 func getStreamRoute(ctx *gin.Context) {
+	w := ctx.Writer
+	r := ctx.Request
+
 	messageIDParm := ctx.Param("messageID")
 	messageID, err := strconv.Atoi(messageIDParm)
 	if err != nil {
-		http.Error(ctx.Writer, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	authHash := ctx.Query("hash")
 	if authHash == "" {
-		http.Error(ctx.Writer, "missing hash param", http.StatusBadRequest)
+		http.Error(w, "missing hash param", http.StatusBadRequest)
 		return
 	}
 
@@ -48,7 +51,7 @@ func getStreamRoute(ctx *gin.Context) {
 		return utils.FileFromMessage(ctx, worker.Client, messageID)
 	})
 	if err != nil {
-		http.Error(ctx.Writer, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -59,33 +62,13 @@ func getStreamRoute(ctx *gin.Context) {
 		file.ID,
 	)
 	if !utils.CheckHash(authHash, expectedHash) {
-		http.Error(ctx.Writer, "invalid hash", http.StatusBadRequest)
+		http.Error(w, "invalid hash", http.StatusBadRequest)
 		return
 	}
 
-	serveFile(ctx, worker.Client, file)
-}
-
-func getUserStreamRoute(ctx *gin.Context) {
-	ref, ok := userstream.Get(ctx.Param("token"))
-	if !ok {
-		http.Error(ctx.Writer, "stream token not found", http.StatusNotFound)
-		return
-	}
-	client := userstream.Client()
-	if client == nil {
-		http.Error(ctx.Writer, "USER_SESSION is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	serveFile(ctx, client, ref.File)
-}
-
-func serveFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
-	w := ctx.Writer
-	r := ctx.Request
-
+	// for photo messages
 	if file.FileSize == 0 {
-		res, err := client.API().UploadGetFile(ctx, &tg.UploadGetFileRequest{
+		res, err := worker.Client.API().UploadGetFile(ctx, &tg.UploadGetFileRequest{
 			Location: file.Location,
 			Offset:   0,
 			Limit:    1024 * 1024,
@@ -100,9 +83,13 @@ func serveFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
 			return
 		}
 		fileBytes := result.GetBytes()
+		ctx.Header("Content-Type", file.MimeType)
+		ctx.Header("Content-Length", strconv.Itoa(len(fileBytes)))
 		ctx.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
 		if r.Method != "HEAD" {
 			ctx.Data(http.StatusOK, file.MimeType, fileBytes)
+		} else {
+			w.WriteHeader(http.StatusOK)
 		}
 		return
 	}
@@ -114,7 +101,6 @@ func serveFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
 	if rangeHeader == "" {
 		start = 0
 		end = file.FileSize - 1
-		w.WriteHeader(http.StatusOK)
 	} else {
 		ranges, err := range_parser.Parse(file.FileSize, r.Header.Get("Range"))
 		if err != nil {
@@ -129,7 +115,6 @@ func serveFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
 		end = ranges[0].End
 		ctx.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, file.FileSize))
 		log.Info("Content-Range", zap.Int64("start", start), zap.Int64("end", end), zap.Int64("fileSize", file.FileSize))
-		w.WriteHeader(http.StatusPartialContent)
 	}
 
 	contentLength := end - start + 1
@@ -149,6 +134,119 @@ func serveFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
 	}
 
 	ctx.Header("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, file.FileName))
+
+	status := http.StatusOK
+	if rangeHeader != "" {
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
+
+	if r.Method != "HEAD" {
+		pipe, err := stream.NewStreamPipe(ctx, worker.Client, file.Location, start, end, log)
+		if err != nil {
+			log.Error("Failed to create stream pipe", zap.Error(err))
+			return
+		}
+		defer pipe.Close()
+		if _, err := io.CopyN(w, pipe, contentLength); err != nil {
+			if !utils.IsClientDisconnectError(err) {
+				log.Error("Error while copying stream", zap.Error(err))
+			}
+		}
+	}
+}
+
+func getUserStreamRoute(ctx *gin.Context) {
+	client := userstream.Client()
+	if client == nil {
+		http.Error(ctx.Writer, "USER_SESSION is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	file, err := userstream.ResolveFile(ctx, ctx.Param("token"))
+	if err != nil {
+		http.Error(ctx.Writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	serveUserStreamFile(ctx, client, file)
+}
+
+func serveUserStreamFile(ctx *gin.Context, client *gotgproto.Client, file *types.File) {
+	w := ctx.Writer
+	r := ctx.Request
+
+	if file.FileSize == 0 {
+		res, err := client.API().UploadGetFile(ctx, &tg.UploadGetFileRequest{
+			Location: file.Location,
+			Offset:   0,
+			Limit:    1024 * 1024,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		result, ok := res.(*tg.UploadFile)
+		if !ok {
+			http.Error(w, "unexpected response", http.StatusInternalServerError)
+			return
+		}
+		fileBytes := result.GetBytes()
+		ctx.Header("Content-Type", file.MimeType)
+		ctx.Header("Content-Length", strconv.Itoa(len(fileBytes)))
+		ctx.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+		if r.Method != "HEAD" {
+			ctx.Data(http.StatusOK, file.MimeType, fileBytes)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		return
+	}
+
+	ctx.Header("Accept-Ranges", "bytes")
+	var start, end int64
+	rangeHeader := r.Header.Get("Range")
+
+	if rangeHeader == "" {
+		start = 0
+		end = file.FileSize - 1
+	} else {
+		ranges, err := range_parser.Parse(file.FileSize, r.Header.Get("Range"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(ranges) == 0 {
+			http.Error(w, "invalid range", http.StatusBadRequest)
+			return
+		}
+		start = ranges[0].Start
+		end = ranges[0].End
+		ctx.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, file.FileSize))
+		log.Info("Content-Range", zap.Int64("start", start), zap.Int64("end", end), zap.Int64("fileSize", file.FileSize))
+	}
+
+	contentLength := end - start + 1
+	mimeType := file.MimeType
+
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	ctx.Header("Content-Type", mimeType)
+	ctx.Header("Content-Length", strconv.FormatInt(contentLength, 10))
+
+	disposition := "inline"
+
+	if ctx.Query("d") == "true" {
+		disposition = "attachment"
+	}
+
+	ctx.Header("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, file.FileName))
+
+	status := http.StatusOK
+	if rangeHeader != "" {
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
 
 	if r.Method != "HEAD" {
 		pipe, err := stream.NewStreamPipe(ctx, client, file.Location, start, end, log)

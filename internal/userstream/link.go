@@ -2,8 +2,10 @@ package userstream
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
@@ -30,14 +33,21 @@ var (
 	store   = make(map[string]*Ref)
 )
 
+const (
+	refTTL         = time.Hour
+	maxRefCount    = 10000
+	tokenSignature = 32
+)
+
 type Link struct {
-	Raw       string
-	GroupID   string
-	ChannelID int64
-	MessageID int
-	TopicID   int
-	CommentID int
-	Private   bool
+	Raw        string
+	GroupID    string
+	ChannelID  int64
+	AccessHash int64
+	MessageID  int
+	TopicID    int
+	CommentID  int
+	Private    bool
 }
 
 type Ref struct {
@@ -45,6 +55,18 @@ type Ref struct {
 	Link      Link
 	File      *types.File
 	CreatedAt time.Time
+}
+
+type TokenPayload struct {
+	Version    int    `json:"v"`
+	Raw        string `json:"raw"`
+	GroupID    string `json:"group_id"`
+	ChannelID  int64  `json:"channel_id,omitempty"`
+	AccessHash int64  `json:"access_hash,omitempty"`
+	MessageID  int    `json:"message_id"`
+	TopicID    int    `json:"topic_id,omitempty"`
+	CommentID  int    `json:"comment_id,omitempty"`
+	Private    bool   `json:"private,omitempty"`
 }
 
 type Info struct {
@@ -163,7 +185,7 @@ func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	msgs, chat, err := getMessages(ctx, c, link)
+	msgs, chat, channel, err := getMessages(ctx, c, link)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +206,12 @@ func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 		if err != nil {
 			continue
 		}
-		token, _, err := Save(link, file)
+		mediaLink := link
+		mediaLink.ChannelID = channel.ChannelID
+		mediaLink.AccessHash = channel.AccessHash
+		mediaLink.MessageID = msg.ID
+		mediaLink.CommentID = 0
+		token, _, err := Save(mediaLink, file)
 		if err != nil {
 			continue
 		}
@@ -228,53 +255,174 @@ func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 }
 
 func Get(token string) (*Ref, bool) {
-	storeMu.RLock()
-	defer storeMu.RUnlock()
+	cleanupExpiredRefs()
+
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	ref, ok := store[token]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(ref.CreatedAt) > refTTL {
+		delete(store, token)
+		return nil, false
+	}
 	return ref, ok
 }
 
 func Save(link Link, file *types.File) (string, *Ref, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
+	cleanupExpiredRefs()
+
+	token, err := EncodeToken(link)
+	if err != nil {
 		return "", nil, err
 	}
-	token := hex.EncodeToString(buf)
 	ref := &Ref{Token: token, Link: link, File: file, CreatedAt: time.Now()}
 	storeMu.Lock()
 	store[token] = ref
+	trimOldestRefsLocked()
 	storeMu.Unlock()
 	return token, ref, nil
 }
 
-func getMessages(ctx context.Context, c *gotgproto.Client, link Link) ([]*tg.Message, tg.ChatClass, error) {
-	channel, chat, err := resolveChannel(ctx, c, link)
+func ResolveFile(ctx context.Context, token string) (*types.File, error) {
+	if ref, ok := Get(token); ok {
+		return ref.File, nil
+	}
+
+	link, err := DecodeToken(token)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	res, err := c.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: channel,
-		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: link.MessageID}},
-	})
+	c := Client()
+	if c == nil {
+		return nil, errors.New("USER_SESSION is not configured")
+	}
+	msg, err := getMessage(ctx, c, link)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	messages, ok := res.(*tg.MessagesChannelMessages)
-	if !ok || len(messages.Messages) == 0 {
-		return nil, nil, errors.New("message not found")
+	file, err := utils.FileFromMedia(msg.Media)
+	if err != nil {
+		return nil, err
 	}
-	baseMsg, ok := messages.Messages[0].(*tg.Message)
-	if !ok {
-		return nil, nil, errors.New("message is empty or inaccessible")
+	_, _ = Cache(token, link, file)
+	return file, nil
+}
+
+func Cache(token string, link Link, file *types.File) (*Ref, error) {
+	cleanupExpiredRefs()
+
+	if token == "" {
+		return nil, errors.New("empty token")
+	}
+	ref := &Ref{Token: token, Link: link, File: file, CreatedAt: time.Now()}
+	storeMu.Lock()
+	store[token] = ref
+	trimOldestRefsLocked()
+	storeMu.Unlock()
+	return ref, nil
+}
+
+func EncodeToken(link Link) (string, error) {
+	payload := TokenPayload{
+		Version:    1,
+		Raw:        link.Raw,
+		GroupID:    link.GroupID,
+		ChannelID:  link.ChannelID,
+		AccessHash: link.AccessHash,
+		MessageID:  link.MessageID,
+		TopicID:    link.TopicID,
+		CommentID:  link.CommentID,
+		Private:    link.Private,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sig := signPayload(payloadBytes)
+	return base64.RawURLEncoding.EncodeToString(payloadBytes) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func DecodeToken(token string) (Link, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return Link{}, errors.New("invalid stream token")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return Link{}, errors.New("invalid stream token payload")
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return Link{}, errors.New("invalid stream token signature")
+	}
+	if !hmac.Equal(sig, signPayload(payloadBytes)) {
+		return Link{}, errors.New("invalid stream token signature")
+	}
+	var payload TokenPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return Link{}, errors.New("invalid stream token payload")
+	}
+	if payload.Version != 1 || payload.MessageID <= 0 || payload.GroupID == "" {
+		return Link{}, errors.New("invalid stream token payload")
+	}
+	return Link{
+		Raw:        payload.Raw,
+		GroupID:    payload.GroupID,
+		ChannelID:  payload.ChannelID,
+		AccessHash: payload.AccessHash,
+		MessageID:  payload.MessageID,
+		TopicID:    payload.TopicID,
+		CommentID:  payload.CommentID,
+		Private:    payload.Private,
+	}, nil
+}
+
+func signPayload(payload []byte) []byte {
+	mac := hmac.New(sha256.New, []byte(config.ValueOf.ApiHash))
+	mac.Write(payload)
+	return mac.Sum(nil)[:tokenSignature]
+}
+
+func cleanupExpiredRefs() {
+	cutoff := time.Now().Add(-refTTL)
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	for token, ref := range store {
+		if ref.CreatedAt.Before(cutoff) {
+			delete(store, token)
+		}
+	}
+}
+
+func trimOldestRefsLocked() {
+	for len(store) > maxRefCount {
+		var oldestToken string
+		var oldestTime time.Time
+		for token, ref := range store {
+			if oldestToken == "" || ref.CreatedAt.Before(oldestTime) {
+				oldestToken = token
+				oldestTime = ref.CreatedAt
+			}
+		}
+		delete(store, oldestToken)
+	}
+}
+
+func getMessages(ctx context.Context, c *gotgproto.Client, link Link) ([]*tg.Message, tg.ChatClass, *tg.InputChannel, error) {
+	baseMsg, chat, channel, err := getMessageWithChannel(ctx, c, link)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	if baseMsg.GroupedID == 0 {
-		return []*tg.Message{baseMsg}, chat, nil
+		return []*tg.Message{baseMsg}, chat, channel, nil
 	}
 
 	// If it's a grouped message, fetch surrounding messages to find siblings
 	searchIDs := make([]tg.InputMessageClass, 0)
-	for i := link.MessageID - 10; i <= link.MessageID + 10; i++ {
+	for i := link.MessageID - 10; i <= link.MessageID+10; i++ {
 		searchIDs = append(searchIDs, &tg.InputMessageID{ID: i})
 	}
 
@@ -283,12 +431,12 @@ func getMessages(ctx context.Context, c *gotgproto.Client, link Link) ([]*tg.Mes
 		ID:      searchIDs,
 	})
 	if err != nil {
-		return []*tg.Message{baseMsg}, chat, nil // Fallback to single message
+		return []*tg.Message{baseMsg}, chat, channel, nil // Fallback to single message
 	}
 
 	groupMessages, ok := resGroup.(*tg.MessagesChannelMessages)
 	if !ok {
-		return []*tg.Message{baseMsg}, chat, nil
+		return []*tg.Message{baseMsg}, chat, channel, nil
 	}
 
 	var result []*tg.Message
@@ -310,10 +458,38 @@ func getMessages(ctx context.Context, c *gotgproto.Client, link Link) ([]*tg.Mes
 	}
 
 	if len(result) == 0 {
-		return []*tg.Message{baseMsg}, chat, nil
+		return []*tg.Message{baseMsg}, chat, channel, nil
 	}
 
-	return result, chat, nil
+	return result, chat, channel, nil
+}
+
+func getMessage(ctx context.Context, c *gotgproto.Client, link Link) (*tg.Message, error) {
+	msg, _, _, err := getMessageWithChannel(ctx, c, link)
+	return msg, err
+}
+
+func getMessageWithChannel(ctx context.Context, c *gotgproto.Client, link Link) (*tg.Message, tg.ChatClass, *tg.InputChannel, error) {
+	channel, chat, err := resolveChannel(ctx, c, link)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	res, err := c.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: channel,
+		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: link.MessageID}},
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	messages, ok := res.(*tg.MessagesChannelMessages)
+	if !ok || len(messages.Messages) == 0 {
+		return nil, nil, nil, errors.New("message not found")
+	}
+	baseMsg, ok := messages.Messages[0].(*tg.Message)
+	if !ok {
+		return nil, nil, nil, errors.New("message is empty or inaccessible")
+	}
+	return baseMsg, chat, channel, nil
 }
 
 func resolveChannel(ctx context.Context, c *gotgproto.Client, link Link) (*tg.InputChannel, tg.ChatClass, error) {
@@ -333,6 +509,18 @@ func resolveChannel(ctx context.Context, c *gotgproto.Client, link Link) (*tg.In
 			}
 		}
 		return nil, nil, errors.New("resolved channel info not found")
+	}
+
+	if link.AccessHash != 0 {
+		input := &tg.InputChannel{ChannelID: link.ChannelID, AccessHash: link.AccessHash}
+		chats, err := c.API().ChannelsGetChannels(ctx, []tg.InputChannelClass{input})
+		if err == nil && len(chats.GetChats()) > 0 {
+			if channel, ok := chats.GetChats()[0].(*tg.Channel); ok {
+				c.PeerStorage.AddPeer(channel.ID, channel.AccessHash, storage.TypeChannel, channel.Username)
+			}
+			return input, chats.GetChats()[0], nil
+		}
+		return input, &tg.Channel{ID: link.ChannelID, AccessHash: link.AccessHash}, nil
 	}
 
 	ids := []int64{link.ChannelID, -1000000000000 + link.ChannelID}

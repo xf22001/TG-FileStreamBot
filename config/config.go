@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"golang.org/x/net/proxy"
-	"net/url"
 )
 
 var ValueOf = &config{}
@@ -320,7 +321,13 @@ func (c *config) GetDialer() dcs.DialFunc {
 		if err == nil {
 			d, err := proxy.FromURL(u, proxy.Direct)
 			if err == nil {
-				dialer = d.(proxy.ContextDialer).DialContext
+				if contextDialer, ok := d.(proxy.ContextDialer); ok {
+					dialer = contextDialer.DialContext
+				} else {
+					dialer = func(_ context.Context, network, address string) (net.Conn, error) {
+						return d.Dial(network, address)
+					}
+				}
 			}
 		}
 	}

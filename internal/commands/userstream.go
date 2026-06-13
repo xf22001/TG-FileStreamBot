@@ -70,7 +70,12 @@ func replyUserStreamInfo(ctx *ext.Context, u *ext.Update, rawLink string, verbos
 		}
 		markup := &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{row}}
 
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(styling.Code(message)), &ext.ReplyOpts{
+		_, err = ctx.Reply(u, ext.ReplyTextStyledTextArray([]styling.StyledTextOption{
+			styling.Plain(message + "\n\n"),
+			styling.Code(info.StreamURL),
+			styling.Plain("\n"),
+			styling.Code(info.DownloadURL),
+		}), &ext.ReplyOpts{
 			Markup:           markup,
 			NoWebpage:        false,
 			ReplyToMessageId: u.EffectiveMessage.ID,
@@ -98,7 +103,7 @@ func formatInfoMessage(info *userstream.Info, verbose bool) string {
 		caption = caption[:300] + "..."
 	}
 	return fmt.Sprintf(
-		"Group/Channel\n├─ id: %d\n├─ name: %s\n└─ username: %s\nMessage\n├─ id: %d\n├─ type: %s\n├─ file_name: %s\n├─ file_size: %s\n├─ mime_type: %s\n├─ caption: %s\n├─ stream: %s\n└─ download: %s",
+		"Group/Channel\n├─ id: %d\n├─ name: %s\n└─ username: %s\nMessage\n├─ id: %d\n├─ type: %s\n├─ file_name: %s\n├─ file_size: %s\n├─ mime_type: %s\n└─ caption: %s",
 		info.ChatID,
 		chatName,
 		info.ChatUser,
@@ -108,8 +113,6 @@ func formatInfoMessage(info *userstream.Info, verbose bool) string {
 		formatBytes(info.FileSize),
 		info.MimeType,
 		caption,
-		info.StreamURL,
-		info.DownloadURL,
 	)
 }
 
