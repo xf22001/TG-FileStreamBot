@@ -34,7 +34,7 @@ func StartClient(log *zap.Logger) (*gotgproto.Client, error) {
 					sqlite.Open("fsb.session"),
 				),
 				Resolver: dcs.Plain(dcs.PlainOptions{
-					Dial: config.ValueOf.GetDialer(),
+					Dial: config.ValueOf.GetDialer(log),
 				}),
 				DisableCopyright: true,
 			},

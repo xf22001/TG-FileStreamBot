@@ -33,7 +33,7 @@ func StartUserBot(l *zap.Logger) {
 		&gotgproto.ClientOpts{
 			Session: sessionMaker.PyrogramSession(config.ValueOf.UserSession),
 			Resolver: dcs.Plain(dcs.PlainOptions{
-				Dial: config.ValueOf.GetDialer(),
+				Dial: config.ValueOf.GetDialer(log),
 			}),
 			DisableCopyright: true,
 		},

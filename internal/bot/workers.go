@@ -162,7 +162,7 @@ func startWorker(l *zap.Logger, botToken string, index int) (*gotgproto.Client, 
 		&gotgproto.ClientOpts{
 			Session: sessionType,
 			Resolver: dcs.Plain(dcs.PlainOptions{
-				Dial: config.ValueOf.GetDialer(),
+				Dial: config.ValueOf.GetDialer(log.Desugar()),
 			}),
 			DisableCopyright: true,
 			Middlewares:      GetFloodMiddleware(log.Desugar()),

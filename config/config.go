@@ -314,22 +314,35 @@ func abs(x int) int {
 	return x
 }
 
-func (c *config) GetDialer() dcs.DialFunc {
+func (c *config) GetDialer(loggers ...*zap.Logger) dcs.DialFunc {
 	dialer := proxy.Dial
 	if c.Proxy != "" {
 		u, err := url.Parse(c.Proxy)
-		if err == nil {
-			d, err := proxy.FromURL(u, proxy.Direct)
-			if err == nil {
-				if contextDialer, ok := d.(proxy.ContextDialer); ok {
-					dialer = contextDialer.DialContext
-				} else {
-					dialer = func(_ context.Context, network, address string) (net.Conn, error) {
-						return d.Dial(network, address)
-					}
-				}
+		if err != nil {
+			logProxyWarning(loggers, "Invalid PROXY URL; falling back to direct connection", err)
+			return dialer
+		}
+		d, err := proxy.FromURL(u, proxy.Direct)
+		if err != nil {
+			logProxyWarning(loggers, "Failed to configure PROXY; falling back to direct connection", err)
+			return dialer
+		}
+		if contextDialer, ok := d.(proxy.ContextDialer); ok {
+			dialer = contextDialer.DialContext
+		} else {
+			dialer = func(_ context.Context, network, address string) (net.Conn, error) {
+				return d.Dial(network, address)
 			}
 		}
 	}
 	return dialer
+}
+
+func logProxyWarning(loggers []*zap.Logger, msg string, err error) {
+	for _, logger := range loggers {
+		if logger != nil {
+			logger.Warn(msg, zap.Error(err))
+			return
+		}
+	}
 }
