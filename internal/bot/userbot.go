@@ -102,10 +102,11 @@ func (u *UserBotStruct) AddBotsAsAdmins() error {
 		}
 		botInfo, err := ctx.ResolveUsername(bot.Self.Username)
 		if err != nil {
-			u.log.Warn(err.Error())
+			u.log.Warn("Failed to resolve bot username, skipping", zap.Error(err), zap.String("username", bot.Self.Username))
+			continue
 		}
 		_, err = u.client.API().ChannelsEditAdmin(
-			u.client.CreateContext().Context,
+			ctx.Context,
 			&tg.ChannelsEditAdminRequest{
 				Channel: inputChannel,
 				UserID:  botInfo.GetInputUser(),

@@ -298,7 +298,7 @@ func checkIfIpAccessible(ip string) bool {
 
 func stripInt(log *zap.Logger, a int) int {
 	strA := strconv.Itoa(abs(a))
-	lastDigits := strings.Replace(strA, "100", "", 1)
+	lastDigits := strings.TrimPrefix(strA, "100")
 	result, err := strconv.Atoi(lastDigits)
 	if err != nil {
 		log.Sugar().Fatalln(err)

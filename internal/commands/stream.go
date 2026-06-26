@@ -71,24 +71,24 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
 		return dispatcher.EndGroups
 	}
-	if len(update.Updates) < 2 {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected update structure from Telegram"), nil)
+	var messageID int
+	var msg *tg.Message
+	for _, u := range update.Updates {
+		switch upd := u.(type) {
+		case *tg.UpdateMessageID:
+			messageID = upd.ID
+		case *tg.UpdateNewChannelMessage:
+			if m, ok := upd.Message.(*tg.Message); ok {
+				msg = m
+			}
+		}
+	}
+	if messageID == 0 {
+		ctx.Reply(u, ext.ReplyTextString("Error - failed to get forwarded message ID"), nil)
 		return dispatcher.EndGroups
 	}
-	msgIDUpdate, ok := update.Updates[0].(*tg.UpdateMessageID)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected update type"), nil)
-		return dispatcher.EndGroups
-	}
-	messageID := msgIDUpdate.ID
-	newMsg, ok := update.Updates[1].(*tg.UpdateNewChannelMessage)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected channel message update"), nil)
-		return dispatcher.EndGroups
-	}
-	msg, ok := newMsg.Message.(*tg.Message)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected message type"), nil)
+	if msg == nil {
+		ctx.Reply(u, ext.ReplyTextString("Error - failed to get forwarded message content"), nil)
 		return dispatcher.EndGroups
 	}
 	doc := msg.Media

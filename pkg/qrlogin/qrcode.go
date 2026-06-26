@@ -123,13 +123,18 @@ func GenerateQRSession(apiId int, apiHash string) error {
 		} else {
 			fmt.Println("Logged in as @", user.Username)
 		}
-		res, _ := sessionStorage.LoadSession(ctx)
+		res, err := sessionStorage.LoadSession(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to load session: %w", err)
+		}
 		type jsonDataStruct struct {
 			Version int
 			Data    session.Data
 		}
 		var jsonData jsonDataStruct
-		json.Unmarshal(res, &jsonData)
+		if err := json.Unmarshal(res, &jsonData); err != nil {
+			return fmt.Errorf("failed to parse session data: %w", err)
+		}
 		stringSession, err = EncodeToPyrogramSession(&jsonData.Data, int32(apiId))
 		if err != nil {
 			return err

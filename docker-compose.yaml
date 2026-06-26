@@ -9,7 +9,7 @@ services:
       - ./logs:/app/logs
       - ./fsb.env:/app/fsb.env
     ports:
-      - "${PORT:-8038}:${PORT:-8038}"
+      - "${PORT:-8080}:${PORT:-8080}"
     env_file:
       - path: ./fsb.env
         required: true

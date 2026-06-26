@@ -67,25 +67,33 @@ func (w *BotWorkers) incStarting() {
 }
 
 func (w *BotWorkers) Add(token string) (err error) {
-	w.incStarting()
-	var botID int = w.starting
+	w.mut.Lock()
+	w.starting++
+	botID := w.starting
+	w.mut.Unlock()
+
 	client, err := startWorker(w.log, token, botID)
 	if err != nil {
 		return err
 	}
 	w.log.Sugar().Infof("Bot @%s loaded with ID %d", client.Self.Username, botID)
+	w.mut.Lock()
 	w.Bots = append(w.Bots, &Worker{
 		Client: client,
 		ID:     botID,
 		Self:   client.Self,
 		log:    w.log,
 	})
+	w.mut.Unlock()
 	return nil
 }
 
 func GetNextWorker() *Worker {
 	Workers.mut.Lock()
 	defer Workers.mut.Unlock()
+	if len(Workers.Bots) == 0 {
+		return nil
+	}
 	index := (Workers.index + 1) % len(Workers.Bots)
 	Workers.index = index
 	worker := Workers.Bots[index]

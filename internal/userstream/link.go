@@ -204,6 +204,9 @@ func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 	for _, msg := range msgs {
 		file, err := utils.FileFromMedia(msg.Media)
 		if err != nil {
+			if log != nil {
+				log.Warn("skipping message: failed to extract media", zap.Int("messageID", msg.ID), zap.Error(err))
+			}
 			continue
 		}
 		mediaLink := link
@@ -213,6 +216,9 @@ func ResolveInfos(ctx context.Context, rawLink, host string) ([]*Info, error) {
 		mediaLink.CommentID = 0
 		token, _, err := Save(mediaLink, file)
 		if err != nil {
+			if log != nil {
+				log.Warn("skipping message: failed to save token", zap.Int("messageID", msg.ID), zap.Error(err))
+			}
 			continue
 		}
 		streamURL := strings.TrimRight(host, "/") + "/u/stream/" + token

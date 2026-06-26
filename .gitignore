@@ -23,7 +23,7 @@ fsb.env
 
 # Session files
 *.session*
-sessons/
+sessions/
 
 # build folder
 dist/

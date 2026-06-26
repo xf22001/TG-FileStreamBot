@@ -45,6 +45,10 @@ func getStreamRoute(ctx *gin.Context) {
 	}
 
 	worker := bot.GetNextWorker()
+	if worker == nil {
+		http.Error(w, "no worker available", http.StatusServiceUnavailable)
+		return
+	}
 
 	file, err := utils.TimeFuncWithResult(log, "FileFromMessage", func() (*types.File, error) {
 		return utils.FileFromMessage(ctx, worker.Client, messageID)
