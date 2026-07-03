@@ -2,10 +2,6 @@ package userstream
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -14,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/token"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
@@ -34,9 +30,9 @@ var (
 )
 
 const (
-	refTTL         = time.Hour
-	maxRefCount    = 10000
-	tokenSignature = 32
+	refTTL      = time.Hour
+	maxRefCount = 10000
+	tokenKind   = "userstream"
 )
 
 type Link struct {
@@ -58,7 +54,6 @@ type Ref struct {
 }
 
 type TokenPayload struct {
-	Version    int    `json:"v"`
 	Raw        string `json:"raw"`
 	GroupID    string `json:"group_id"`
 	ChannelID  int64  `json:"channel_id,omitempty"`
@@ -332,7 +327,6 @@ func Cache(token string, link Link, file *types.File) (*Ref, error) {
 
 func EncodeToken(link Link) (string, error) {
 	payload := TokenPayload{
-		Version:    1,
 		Raw:        link.Raw,
 		GroupID:    link.GroupID,
 		ChannelID:  link.ChannelID,
@@ -342,35 +336,15 @@ func EncodeToken(link Link) (string, error) {
 		CommentID:  link.CommentID,
 		Private:    link.Private,
 	}
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	sig := signPayload(payloadBytes)
-	return base64.RawURLEncoding.EncodeToString(payloadBytes) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+	return token.Encode(tokenKind, payload)
 }
 
-func DecodeToken(token string) (Link, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return Link{}, errors.New("invalid stream token")
-	}
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return Link{}, errors.New("invalid stream token payload")
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return Link{}, errors.New("invalid stream token signature")
-	}
-	if !hmac.Equal(sig, signPayload(payloadBytes)) {
-		return Link{}, errors.New("invalid stream token signature")
-	}
+func DecodeToken(inputToken string) (Link, error) {
 	var payload TokenPayload
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+	if err := token.Decode(inputToken, tokenKind, &payload); err != nil {
 		return Link{}, errors.New("invalid stream token payload")
 	}
-	if payload.Version != 1 || payload.MessageID <= 0 || payload.GroupID == "" {
+	if payload.MessageID <= 0 || payload.GroupID == "" {
 		return Link{}, errors.New("invalid stream token payload")
 	}
 	return Link{
@@ -383,12 +357,6 @@ func DecodeToken(token string) (Link, error) {
 		CommentID:  payload.CommentID,
 		Private:    payload.Private,
 	}, nil
-}
-
-func signPayload(payload []byte) []byte {
-	mac := hmac.New(sha256.New, []byte(config.ValueOf.ApiHash))
-	mac.Write(payload)
-	return mac.Sum(nil)[:tokenSignature]
 }
 
 func cleanupExpiredRefs() {

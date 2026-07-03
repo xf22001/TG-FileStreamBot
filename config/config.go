@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -49,7 +48,6 @@ type config struct {
 	Dev            bool         `envconfig:"DEV" default:"false"`
 	Port           int          `envconfig:"PORT" default:"8080"`
 	Host           string       `envconfig:"HOST" default:""`
-	HashLength     int          `envconfig:"HASH_LENGTH" default:"6"`
 	UseSessionFile bool         `envconfig:"USE_SESSION_FILE" default:"true"`
 	UserSession    string       `envconfig:"USER_SESSION"`
 	UsePublicIP    bool         `envconfig:"USE_PUBLIC_IP" default:"false"`
@@ -64,7 +62,7 @@ type config struct {
 	StreamMaxRetries  int `envconfig:"STREAM_MAX_RETRIES" default:"3"`
 }
 
-var botTokenRegex = regexp.MustCompile(`MULTI\_TOKEN\d+=(.*)`)
+var botTokenRegex = regexp.MustCompile(`^MULTI_TOKEN\d+=(.*)$`)
 
 func (c *config) loadFromEnvFile(log *zap.Logger) {
 	envPath := filepath.Clean("fsb.env")
@@ -72,10 +70,7 @@ func (c *config) loadFromEnvFile(log *zap.Logger) {
 	err := godotenv.Load(envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Sugar().Errorf("ENV file not found: %s", envPath)
-			log.Sugar().Info("Please create fsb.env file")
-			log.Sugar().Info("For more info, refer: https://github.com/EverythingSuckz/TG-FileStreamBot/tree/golang#setting-up-things")
-			log.Sugar().Info("Please ignore this message if you are hosting it in a service like Heroku or other alternatives.")
+			log.Sugar().Infof("ENV file not found: %s; continuing with process environment and flags", envPath)
 		} else {
 			log.Fatal("Unknown error while parsing env file.", zap.Error(err))
 		}
@@ -90,12 +85,10 @@ func SetFlagsFromConfig(cmd *cobra.Command) {
 	cmd.Flags().Bool("dev", ValueOf.Dev, "Enable development mode")
 	cmd.Flags().IntP("port", "p", ValueOf.Port, "Server port")
 	cmd.Flags().String("host", ValueOf.Host, "Server host that will be included in links")
-	cmd.Flags().Int("hash-length", ValueOf.HashLength, "Hash length in links")
 	cmd.Flags().Bool("use-session-file", ValueOf.UseSessionFile, "Use session files")
 	cmd.Flags().String("user-session", ValueOf.UserSession, "Pyrogram user session")
 	cmd.Flags().Bool("use-public-ip", ValueOf.UsePublicIP, "Use public IP instead of local IP")
 	cmd.Flags().String("proxy", ValueOf.Proxy, "Proxy URL (e.g. socks5://127.0.0.1:1080)")
-	cmd.Flags().String("multi-token-txt-file", "", "Multi token txt file (Not implemented)")
 	cmd.Flags().Int("stream-concurrency", ValueOf.StreamConcurrency, "Number of parallel block fetches")
 	cmd.Flags().Int("stream-buffer-count", ValueOf.StreamBufferCount, "Number of blocks to prefetch")
 	cmd.Flags().Int("stream-timeout-sec", ValueOf.StreamTimeoutSec, "Maximum time to wait for a single block (in seconds)")
@@ -131,10 +124,6 @@ func (c *config) loadConfigFromArgs(log *zap.Logger, cmd *cobra.Command) {
 	if host != "" {
 		os.Setenv("HOST", host)
 	}
-	hashLength, _ := cmd.Flags().GetInt("hash-length")
-	if hashLength != 0 {
-		os.Setenv("HASH_LENGTH", strconv.Itoa(hashLength))
-	}
 	useSessionFile, _ := cmd.Flags().GetBool("use-session-file")
 	if useSessionFile {
 		os.Setenv("USE_SESSION_FILE", strconv.FormatBool(useSessionFile))
@@ -146,11 +135,6 @@ func (c *config) loadConfigFromArgs(log *zap.Logger, cmd *cobra.Command) {
 	usePublicIP, _ := cmd.Flags().GetBool("use-public-ip")
 	if usePublicIP {
 		os.Setenv("USE_PUBLIC_IP", strconv.FormatBool(usePublicIP))
-	}
-	multiTokens, _ := cmd.Flags().GetString("multi-token-txt-file")
-	if multiTokens != "" {
-		os.Setenv("MULTI_TOKEN_TXT_FILE", multiTokens)
-		// TODO: Add support for importing tokens from a separate file
 	}
 	streamConcurrency, _ := cmd.Flags().GetInt("stream-concurrency")
 	if streamConcurrency != 0 {
@@ -199,13 +183,19 @@ func (c *config) setupEnvVars(log *zap.Logger, cmd *cobra.Command) {
 		}
 		log.Sugar().Info("HOST not set, automatically set to " + c.Host)
 	}
-	val := reflect.ValueOf(c).Elem()
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, "MULTI_TOKEN") {
-			c.MultiTokens = append(c.MultiTokens, botTokenRegex.FindStringSubmatch(env)[1])
+	c.MultiTokens = collectMultiTokens(os.Environ())
+}
+
+func collectMultiTokens(environ []string) []string {
+	tokens := make([]string, 0)
+	for _, env := range environ {
+		match := botTokenRegex.FindStringSubmatch(env)
+		if len(match) != 2 || match[1] == "" {
+			continue
 		}
+		tokens = append(tokens, match[1])
 	}
-	val.FieldByName("MultiTokens").Set(reflect.ValueOf(c.MultiTokens))
+	return tokens
 }
 
 func Load(log *zap.Logger, cmd *cobra.Command) {
@@ -213,18 +203,6 @@ func Load(log *zap.Logger, cmd *cobra.Command) {
 	defer log.Info("Loaded config")
 	ValueOf.setupEnvVars(log, cmd)
 	ValueOf.LogChannelID = int64(stripInt(log, int(ValueOf.LogChannelID)))
-	if ValueOf.HashLength == 0 {
-		log.Sugar().Info("HASH_LENGTH can't be 0, defaulting to 6")
-		ValueOf.HashLength = 6
-	}
-	if ValueOf.HashLength > 32 {
-		log.Sugar().Info("HASH_LENGTH can't be more than 32, changing to 32")
-		ValueOf.HashLength = 32
-	}
-	if ValueOf.HashLength < 5 {
-		log.Sugar().Info("HASH_LENGTH can't be less than 5, defaulting to 6")
-		ValueOf.HashLength = 6
-	}
 	if ValueOf.StreamConcurrency <= 0 {
 		log.Sugar().Info("STREAM_CONCURRENCY must be greater than 0, defaulting to 4")
 		ValueOf.StreamConcurrency = 4

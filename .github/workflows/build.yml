@@ -8,6 +8,9 @@ on:
         required: false
         default: 'dev'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -39,10 +42,8 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Before Build Hooks
-        run: |
-          go mod tidy
-          go generate ./...
+      - name: Download Modules
+        run: go mod download
 
       - name: Build Binary
         env:
@@ -80,6 +81,6 @@ jobs:
       - name: Upload to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fsb-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: fsb-${{ github.event.inputs.build_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: upload/*
           retention-days: 7

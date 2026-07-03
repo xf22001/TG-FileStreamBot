@@ -40,7 +40,13 @@ func getStreamRoute(ctx *gin.Context) {
 
 	authHash := ctx.Query("hash")
 	if authHash == "" {
-		http.Error(w, "missing hash param", http.StatusBadRequest)
+		http.Error(w, "invalid link", http.StatusBadRequest)
+		return
+	}
+
+	hashPayload, err := utils.VerifyStreamHash(authHash, messageID)
+	if err != nil {
+		http.Error(w, "invalid link", http.StatusBadRequest)
 		return
 	}
 
@@ -54,18 +60,13 @@ func getStreamRoute(ctx *gin.Context) {
 		return utils.FileFromMessage(ctx, worker.Client, messageID)
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		log.Warn("Failed to resolve stream file", zap.Int("messageID", messageID), zap.Error(err))
+		http.Error(w, "file not found or inaccessible", http.StatusBadRequest)
 		return
 	}
 
-	expectedHash := utils.PackFile(
-		file.FileName,
-		file.FileSize,
-		file.MimeType,
-		file.ID,
-	)
-	if !utils.CheckHash(authHash, expectedHash) {
-		http.Error(w, "invalid hash", http.StatusBadRequest)
+	if !hashPayload.MatchesFile(file) {
+		http.Error(w, "invalid link", http.StatusBadRequest)
 		return
 	}
 
@@ -80,7 +81,8 @@ func getUserStreamRoute(ctx *gin.Context) {
 	}
 	file, err := userstream.ResolveFile(ctx, ctx.Param("token"))
 	if err != nil {
-		http.Error(ctx.Writer, err.Error(), http.StatusBadRequest)
+		log.Warn("Failed to resolve user stream file", zap.Error(err))
+		http.Error(ctx.Writer, "invalid link", http.StatusBadRequest)
 		return
 	}
 	serveStreamFile(ctx, client, file)
