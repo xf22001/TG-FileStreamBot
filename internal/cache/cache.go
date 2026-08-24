@@ -4,7 +4,6 @@ import (
 	"EverythingSuckz/fsb/internal/types"
 	"bytes"
 	"encoding/gob"
-	"sync"
 
 	"github.com/coocood/freecache"
 	"github.com/gotd/td/tg"
@@ -15,7 +14,6 @@ var cache *Cache
 
 type Cache struct {
 	cache *freecache.Cache
-	mu    sync.RWMutex
 	log   *zap.Logger
 }
 
@@ -33,8 +31,6 @@ func GetCache() *Cache {
 }
 
 func (c *Cache) Get(key string, value *types.File) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	data, err := cache.cache.Get([]byte(key))
 	if err != nil {
 		return err
@@ -48,8 +44,6 @@ func (c *Cache) Get(key string, value *types.File) error {
 }
 
 func (c *Cache) Set(key string, value *types.File, expireSeconds int) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	err := enc.Encode(value)
@@ -61,8 +55,6 @@ func (c *Cache) Set(key string, value *types.File, expireSeconds int) error {
 }
 
 func (c *Cache) Delete(key string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	cache.cache.Del([]byte(key))
 	return nil
 }
